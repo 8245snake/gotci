@@ -28,6 +28,8 @@ const (
 	UnitNameNanogram UnitName = "ng"
 	//UnitNameMilligramPerLiter ミリグラム/L
 	UnitNameMilligramPerLiter UnitName = "mg/L"
+	//UnitNameMicrogramPerMilliliter マイクログラム/mL
+	UnitNameMicrogramPerMilliliter UnitName = "μg/mL"
 	//UnitNameNanogramPerMilliliter ナノグラム/mL
 	UnitNameNanogramPerMilliliter UnitName = "ng/mL"
 )

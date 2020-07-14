@@ -54,8 +54,8 @@ func (sim *Simulation) SetModel(model *Model) *Simulation {
 	return sim
 }
 
-//SetRange 時間設定(startを含む時刻からminute分だけ指定)
-func (sim *Simulation) SetRange(start time.Time, minutes int) *Simulation {
+//InitRange 時間設定(startを含む時刻からminute分だけ指定)
+func (sim *Simulation) InitRange(start time.Time, minutes int) *Simulation {
 	//開始時刻（秒数を0に）
 	date := time.Date(start.Year(), start.Month(), start.Day(), start.Hour(), start.Minute(), 0, 0, time.Local)
 	sim.startTime = &date
@@ -65,7 +65,7 @@ func (sim *Simulation) SetRange(start time.Time, minutes int) *Simulation {
 	//空の投与量を作成
 	inTime := date
 	for {
-		injection := NewInjection(inTime, 0.0, nil)
+		injection := NewInjection(inTime, 0.0, 0.0)
 		sim.injections = append(sim.injections, injection)
 		inTime = inTime.Add(time.Duration(sim.timestep) * time.Second)
 		if inTime.After(end) {
@@ -84,7 +84,8 @@ func (sim *Simulation) Predict() {
 	ce := 0.0
 
 	for _, inject := range sim.injections {
-		bolus, continuous := inject.getAmount(sim.h)
+		bolus := inject.bolus
+		continuous := inject.continuous
 		c1, c2, c3, ce = sim.model.rungeKutta(c1, c2, c3, ce, bolus, continuous, sim.h)
 		datetime := time.Date(inject.time.Year(), inject.time.Month(), inject.time.Day(), inject.time.Hour(), inject.time.Minute(), inject.time.Second(), 0, time.Local)
 		sim.c1 = append(sim.c1, Prediction{time: &datetime, concentration: c1 / (sim.model.v1 * 1000)})
@@ -92,23 +93,76 @@ func (sim *Simulation) Predict() {
 	}
 }
 
-//AddInjection 投与
-func (sim *Simulation) AddInjection(inTime time.Time, amount float64, unit Unit) *Simulation {
-	//刻み時間に丸める
+//刻み時間に丸める
+func canonicalTime(inTime *time.Time, timestep float64) time.Time {
 	sec := inTime.Minute()*60 + inTime.Second()
-	sec = sec - sec%int(sim.timestep)
-	inTime = time.Date(inTime.Year(), inTime.Month(), inTime.Day(), inTime.Hour(), 0, 0, 0, time.Local)
-	inTime = inTime.Add(time.Duration(sec) * time.Second)
-	additional := NewInjection(inTime, amount, &unit)
+	sec = sec - sec%int(timestep)
+	t := time.Date(inTime.Year(), inTime.Month(), inTime.Day(), inTime.Hour(), 0, 0, 0, time.Local)
+	t = t.Add(time.Duration(sec) * time.Second)
+	return t
+}
+
+//Continuous 持続投与
+func (sim *Simulation) Continuous(startTime *time.Time, stopTime *time.Time, amount float64, unit Unit, conc float64) *Simulation {
+	//刻み時間に丸める
+	var start, end time.Time
+	if startTime != nil {
+		start = canonicalTime(startTime, sim.timestep)
+	} else {
+		//開始未定の場合は現在時刻とする
+		now := time.Now()
+		start = canonicalTime(&now, sim.timestep)
+	}
+
+	if stopTime != nil {
+		end = canonicalTime(stopTime, sim.timestep)
+	} else {
+		//終了未定の場合はすごい未来にする
+		end = time.Date(2099, time.December, 31, 0, 0, 0, 0, time.Local)
+	}
+
+	//単位を補正
+	var additional float64
+	switch unit.name {
+	case UnitNameMilligramPerLiter:
+		additional = amount
+	case UnitNameMicrogramPerMilliliter:
+		additional = amount * 1000
+	case UnitNameNanogramPerMilliliter:
+	}
+
+	additional = additional * conc / 60.0
 
 	//injectionsに加える
 	for i, inject := range sim.injections {
-		if inject.time.Equal(inTime) {
-			switch unit.unitType {
-			case UnitTypeBolus:
-				sim.injections[i] = additional
-			case UnitTypeContinuous:
-			}
+		if (inject.time.Equal(start) || inject.time.After(start)) && (inject.time.Equal(end) || inject.time.Before(end)) {
+			sim.injections[i].continuous += additional
+		}
+	}
+	return sim
+}
+
+//Bolus ボーラス追加
+func (sim *Simulation) Bolus(inTime *time.Time, amount float64, unit Unit) *Simulation {
+	//刻み時間に丸める
+	shotTime := canonicalTime(inTime, sim.timestep)
+
+	//単位を補正
+	var additional float64
+	switch unit.name {
+	case UnitNameMilligram:
+		additional = amount * 1000
+	case UnitNameMicrogram:
+		additional = amount * 1000 * 1000
+	case UnitNameNanogram:
+		additional = amount * 1000 * 1000 * 1000
+	}
+
+	//injectionsに加える
+	for i, inject := range sim.injections {
+		if inject.time.Equal(shotTime) {
+			sim.injections[i].bolus += additional
+			break
 		}
 	}
 	return sim
@@ -117,6 +171,6 @@ func (sim *Simulation) AddInjection(inTime time.Time, amount float64, unit Unit)
 //ShowResult 結果を表示
 func (sim *Simulation) ShowResult() {
 	for i, c1 := range sim.c1 {
-		fmt.Println(c1.time.Format("15:04:05"), c1.concentration, sim.ce[i].concentration)
+		fmt.Println(c1.time.Format("2006-01-02 15:04:05"), c1.concentration, sim.ce[i].concentration)
 	}
 }
